@@ -17,6 +17,10 @@ llm:
   generation_kwargs:
     model: gpt-4o-mini
 
+reranker:
+  local:
+    model: sentence-transformers/all-MiniLM-L6-v2
+
 source:
   arxiv:
     category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
@@ -24,3 +28,6 @@ source:
 executor:
   debug: ${oc.env:DEBUG,null}
   source: ['arxiv']
+  max_workers: 1
+  max_paper_num: 20
+  reranker: local
