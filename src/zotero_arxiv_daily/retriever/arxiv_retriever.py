@@ -113,33 +113,46 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=10)
-        query = '+'.join(self.config.source.arxiv.category)
-        include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
-        # Get the latest paper from arxiv rss feed
-        feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
-        if 'Feed error for query' in feed.feed.title:
-            raise Exception(f"Invalid ARXIV_QUERY: {query}.")
-        raw_papers = []
-        allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
-        all_paper_ids = [
-            i.id.removeprefix("oai:arXiv.org:")
-            for i in feed.entries
-            if i.get("arxiv_announce_type", "new") in allowed_announce_types
-        ]
-        if self.config.executor.debug:
-            all_paper_ids = all_paper_ids[:10]
+    client = arxiv.Client(
+        page_size=5,
+        delay_seconds=15,
+        num_retries=20,
+    )
 
-        # Get full information of each paper from arxiv api
-        bar = tqdm(total=len(all_paper_ids))
-        for i in range(0, len(all_paper_ids), 20):
-            search = arxiv.Search(id_list=all_paper_ids[i:i + 20])
-            batch = list(client.results(search))
-            bar.update(len(batch))
-            raw_papers.extend(batch)
-        bar.close()
+    query = '+'.join(self.config.source.arxiv.category)
+    include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
 
-        return raw_papers
+    # Get the latest paper from arxiv rss feed
+    feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
+    if 'Feed error for query' in feed.feed.title:
+        raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+
+    raw_papers = []
+    allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
+
+    all_paper_ids = [
+        i.id.removeprefix("oai:arXiv.org:")
+        for i in feed.entries
+        if i.get("arxiv_announce_type", "new") in allowed_announce_types
+    ]
+
+    if self.config.executor.debug:
+        all_paper_ids = all_paper_ids[:10]
+
+    # Get full information of each paper from arxiv api
+    # Fetch only 5 papers per request to reduce 429/503 errors.
+    bar = tqdm(total=len(all_paper_ids))
+
+    for i in range(0, len(all_paper_ids), 5):
+        search = arxiv.Search(id_list=all_paper_ids[i:i + 5])
+        batch = list(client.results(search))
+
+        bar.update(len(batch))
+        raw_papers.extend(batch)
+
+    bar.close()
+
+    return raw_papers
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
         title = raw_paper.title
