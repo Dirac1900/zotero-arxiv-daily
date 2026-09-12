@@ -112,7 +112,7 @@ class ArxivRetriever(BaseRetriever):
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
 
-        def _retrieve_raw_papers(self) -> list[ArxivResult]:
+    def _retrieve_raw_papers(self) -> list[ArxivResult]:
         client = arxiv.Client(
             page_size=5,
             delay_seconds=15,
