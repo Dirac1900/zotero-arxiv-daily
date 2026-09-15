@@ -117,7 +117,7 @@ class ArxivRetriever(BaseRetriever):
         client = arxiv.Client(
             page_size=5,
             delay_seconds=15,
-            num_retries=3,
+            num_retries=1,
         )
 
         query = '+'.join(self.config.source.arxiv.category)
