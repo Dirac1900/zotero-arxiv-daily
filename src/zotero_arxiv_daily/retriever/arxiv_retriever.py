@@ -9,6 +9,7 @@ from tqdm import tqdm
 import multiprocessing
 import os
 from queue import Empty
+from time import sleep
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
@@ -116,7 +117,7 @@ class ArxivRetriever(BaseRetriever):
         client = arxiv.Client(
             page_size=5,
             delay_seconds=15,
-            num_retries=20,
+            num_retries=3,
         )
 
         query = '+'.join(self.config.source.arxiv.category)
@@ -140,14 +141,77 @@ class ArxivRetriever(BaseRetriever):
             all_paper_ids = all_paper_ids[:10]
 
         # Get full information of each paper from arxiv API
-        # Fetch 5 papers per request to reduce 429/503 errors.
         bar = tqdm(total=len(all_paper_ids))
 
-        for i in range(0, len(all_paper_ids), 5):
-            search = arxiv.Search(id_list=all_paper_ids[i:i + 5])
-            batch = list(client.results(search))
+        batch_size = 5
+        max_batch_retries = 3
+        batch_retry_delay = 60
+
+        for i in range(0, len(all_paper_ids), batch_size):
+            batch_ids = all_paper_ids[i:i + batch_size]
+            search = arxiv.Search(id_list=batch_ids)
+
+            batch = []
+
+            for attempt in range(max_batch_retries):
+                try:
+                    batch = list(client.results(search))
+                    break
+
+                except arxiv.HTTPError as exc:
+                    if exc.status in (429, 503):
+                        if attempt < max_batch_retries - 1:
+                            wait = batch_retry_delay * (attempt + 1)
+
+                            logger.warning(
+                                f"arXiv API returned HTTP {exc.status} "
+                                f"for batch {i // batch_size + 1}. "
+                                f"Retry {attempt + 1}/{max_batch_retries} "
+                                f"after {wait} seconds."
+                            )
+
+                            sleep(wait)
+                            continue
+
+                        logger.warning(
+                            f"arXiv API HTTP {exc.status} persisted after "
+                            f"{max_batch_retries} attempts. "
+                            f"Falling back to individual paper requests."
+                        )
+
+                    else:
+                        logger.warning(
+                            f"arXiv API returned HTTP {exc.status}. "
+                            f"Falling back to individual paper requests."
+                        )
+
+                    # Batch request failed repeatedly:
+                    # fall back to requesting papers one by one.
+                    batch = []
+
+                    for index, paper_id in enumerate(batch_ids):
+                        try:
+                            paper_search = arxiv.Search(id_list=[paper_id])
+                            paper_results = list(client.results(paper_search))
+                            batch.extend(paper_results)
+
+                        except arxiv.HTTPError as paper_exc:
+                            logger.warning(
+                                f"Skipping arXiv paper {paper_id} "
+                                f"because API returned HTTP {paper_exc.status}."
+                            )
+
+                        if index + 1 < len(batch_ids):
+                            sleep(10)
+
+                    break
+
             bar.update(len(batch))
             raw_papers.extend(batch)
+
+            # Pause between batches.
+            if i + batch_size < len(all_paper_ids):
+                sleep(15)
 
         bar.close()
 
